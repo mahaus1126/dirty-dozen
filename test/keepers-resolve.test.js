@@ -34,3 +34,25 @@ test('floor collision at round 1 pushes the junior keeper downstream (rule r14)'
   assert.equal(vet.assignedRound, 1);
   assert.equal(kid.assignedRound, 2); // nowhere above round 1 — pushed down
 });
+
+test('3-way floor collision: seniority order 1, 2, 3', () => {
+  const r = resolveKeeperSlots(
+    [K('vet', 1, 2, 4), K('mid', 1, 1, 5), K('kid', 1, 0, 6)], ALL);
+  assert.deepEqual(r.map(x => [x.name, x.assignedRound]),
+                   [['vet', 1], ['mid', 2], ['kid', 3]]);
+});
+
+test('double-traded rounds: cost 10 with 10 and 9 both traded lands on 8', () => {
+  const owned = ALL.filter(x => x !== 10 && x !== 9);
+  const r = resolveKeeperSlots([K('a', 10)], owned);
+  assert.equal(r[0].assignedRound, 8);
+});
+
+test('senior slide displaces an otherwise-unconflicted junior', () => {
+  // Senior (traded out of 10) slides to 9; junior who wanted 9 cascades to 8.
+  const owned = ALL.filter(x => x !== 10);
+  const r = resolveKeeperSlots([K('senior', 10, 1), K('junior', 9, 0)], owned);
+  assert.equal(r.find(x => x.name === 'senior').assignedRound, 9);
+  assert.equal(r.find(x => x.name === 'junior').assignedRound, 8);
+  assert.equal(r.find(x => x.name === 'junior').moved, true);
+});
