@@ -87,9 +87,10 @@ The engine is deterministic and side-effect free so the CLI and the web page sha
 Writes `finances-2026.csv` (in the parent folder, outside the repo) in the exact Legacy column format:
 `Season Name, Member Name, Amount, Type, Label, Tags, Status`
 
-- 12 × `30, debit, League Dues, , pending` rows at season start (user flips to `paid` as money arrives; re-runs preserve manually edited statuses by merging on Season+Member+Label+Tags).
-- Per completed week: `10, credit, Weekly Points, WeekN, pending` for the high scorer (top total points across all rosters that week, from matchups).
-- Season end: place payouts `120/50/30` for 1st/2nd/3rd from final standings.
+- All dollar amounts come from `config.json`, never hardcoded — dues and payouts have changed over the years, and the workbook's Rules sheet holds the current values (seeded into config at setup, user-editable per season thereafter).
+- 12 × dues debit rows at season start, status `pending` (user flips to `paid` as money arrives; re-runs preserve manually edited statuses by merging on Season+Member+Label+Tags).
+- Per completed week: weekly-points credit for the high scorer (top total points across all rosters that week, from matchups).
+- Season end: 1st/2nd/3rd place payouts from final standings.
 - Member names come from the owner map in `config.json` (Sleeper user → ledger name).
 
 ### web/index.html — live league page
@@ -123,7 +124,7 @@ Season is inferred from the league's `season` field; a `--season` flag overrides
 
 ## Testing
 
-- **Engine regression fixtures (the core guarantee):** committed snapshots of the real 2022–2025 drafts/rosters. The engine run on year N data must reproduce the actual keeper costs observed in year N+1's draft (24 keepers in 2025, 26 in 2024). Divergences must be explained (trades/collisions) or fixed before shipping.
+- **Engine regression fixtures:** committed snapshots of the real 2022–2025 drafts/rosters. The engine run on year N data is compared against the actual keeper costs observed in year N+1's draft (24 keepers in 2025, 26 in 2024). **Historical keeper rounds were computed by hand, so divergences may be human error, not engine bugs.** Each divergence is investigated and classified: (a) engine bug → fix; (b) human error or commissioner discretion → recorded in an explicit allowlist in the test fixtures with a one-line explanation; (c) undocumented rule nuance → confirm with the user, then encode. The engine implements the rules as written, not history as applied. Unexplained divergences block shipping; allowlisted ones don't.
 - Unit tests for each rule in isolation (floor push-down, collision, traded pick, FA track, R1/R2 exception, reset-on-redraft) via `node:test`, offline against fixtures.
 - Excel writer: test writes to a scratch copy, re-reads it, asserts sheet content and that other sheets survived byte-identical where expected.
 - Web page: shares the tested engine; smoke-checked in a browser before each deploy.
