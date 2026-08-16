@@ -1,0 +1,22 @@
+{
+  "leagueId": "1389387813203484672",
+  "workbookPath": "../DirtyDozenFantasyFootball.xlsx",
+  "financesDir": "..",
+  "rounds": 15,
+  "amounts": { "dues": 30, "weeklyPoints": 10, "places": [120, 50, 30] },
+  "owners": [
+    { "sleeperUsername": "AndyMorris", "ledgerName": "Andy" },
+    { "sleeperUsername": "zthoreso", "ledgerName": "Thor" },
+    { "sleeperUsername": "sschraff", "ledgerName": "Schraff" },
+    { "sleeperUsername": "rkitching", "ledgerName": "Rob" },
+    { "sleeperUsername": "cmateja03", "ledgerName": "Chad" },
+    { "sleeperUsername": "tfrizzi", "ledgerName": "Frizzi" },
+    { "sleeperUsername": "ndevillez", "ledgerName": "Nathan" },
+    { "sleeperUsername": "AirFish", "ledgerName": "Fish" },
+    { "sleeperUsername": "mahaus", "ledgerName": "Mitch" },
+    { "sleeperUsername": "amcgowan", "ledgerName": "McGowan" },
+    { "sleeperUsername": "esalata", "ledgerName": "Texas" },
+    { "sleeperUsername": "SrBrown", "ledgerName": "Stephen" }
+  ],
+  "basisOverrides": {}
+}
