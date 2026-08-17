@@ -41,14 +41,14 @@ for (const [prior, next] of [[2021, 2022], [2022, 2023], [2023, 2024], [2024, 20
                  eligible: ev.eligible, reason: ev.reason, actualRound: p.round };
       });
       for (const ev of evaluated.filter(e => !e.eligible)) {
-        mismatches.push({ key: `${next}:${ev.name}`, kind: 'kept-but-engine-says-ineligible',
+        mismatches.push({ key: `${next}:${ev.playerId}:${ev.name}`, kind: 'kept-but-engine-says-ineligible',
                           detail: ev.reason });
       }
       const resolved = resolveKeeperSlots(evaluated.filter(e => e.eligible), owned);
       for (const r of resolved) {
         const actual = evaluated.find(e => e.playerId === r.playerId).actualRound;
         if (r.assignedRound !== actual) {
-          mismatches.push({ key: `${next}:${r.name}`, kind: 'round-mismatch',
+          mismatches.push({ key: `${next}:${r.playerId}:${r.name}`, kind: 'round-mismatch',
                             detail: `engine=${r.assignedRound} actual=${actual} (cost=${r.costRound}, basis=${r.basisRound}, yearsKept=${r.yearsKept})` });
         }
       }

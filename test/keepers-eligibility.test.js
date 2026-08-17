@@ -69,6 +69,15 @@ test('team-scoped: same roster continues the clock', () => {
   assert.equal(ev.costRound, 1);   // 5 - 4
 });
 
+test('team-scoped: R1/R2 keeper-slot exemption does NOT transfer to a new roster', () => {
+  const SP = (playerId, round, isKeeper, rosterId) => ({ playerId, round, isKeeper, rosterId });
+  const seasons = [{ year: 2022, picks: [SP('x', 2, true, 2)] }];
+  const evNew = evaluatePlayer('x', seasons, {}, 8);   // acquired by roster 8
+  assert.equal(evNew.eligible, false);                  // carries R2 draft capital
+  const evSame = evaluatePlayer('x', seasons, {}, 2);   // still roster 2
+  assert.equal(evSame.eligible, true);                  // own keeper slot, exemption holds
+});
+
 test('basisOverrides pin a nominal round (collision-bumped history)', () => {
   const ev = evaluatePlayer('x', [S(2025, [P('x', 9, true)]), S(2024, [P('x', 99)])]);
   // actual draft said 9 (bumped), but nominal was 10:
