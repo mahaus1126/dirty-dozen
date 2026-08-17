@@ -35,7 +35,7 @@ const ledgerNameByUserId = (users) => {
 function warnIfStale(bundle) {
   const ageH = (Date.now() - new Date(bundle.pulledAt).getTime()) / 3600e3;
   if (!Number.isFinite(ageH) || ageH > 24) {
-    console.warn(`WARN: cached Sleeper data is ${Number.isFinite(ageH) ? Math.round(ageH) + 'h' : 'of unknown age'} old — consider: node cli.js pull`);
+    console.warn(`WARN: cached Sleeper data is ${Number.isFinite(ageH) ? Math.round(ageH) + 'h old' : 'of unknown age'} — consider: node cli.js pull`);
   }
 }
 
