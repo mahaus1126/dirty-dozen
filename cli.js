@@ -12,7 +12,15 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(root, 'data');
 const config = JSON.parse(await fs.readFile(path.join(root, 'config.json'), 'utf8'));
 const [cmd, ...rest] = process.argv.slice(2);
-const seasonFlag = rest.includes('--season') ? Number(rest[rest.indexOf('--season') + 1]) : null;
+let seasonFlag = null;
+if (rest.includes('--season')) {
+  const raw = rest[rest.indexOf('--season') + 1];
+  if (!/^\d{4}$/.test(raw ?? '')) {
+    console.error('--season requires a 4-digit year, e.g. --season 2025');
+    process.exit(1);
+  }
+  seasonFlag = Number(raw);
+}
 
 const ledgerNameByUserId = (users) => {
   const byUsername = new Map(config.owners.map(o => [o.sleeperUsername.toLowerCase(), o.ledgerName]));
@@ -23,8 +31,31 @@ const ledgerNameByUserId = (users) => {
   return map;
 };
 
+// The bundle is a local cache; a stale one silently produces last week's answers.
+function warnIfStale(bundle) {
+  const ageH = (Date.now() - new Date(bundle.pulledAt).getTime()) / 3600e3;
+  if (!Number.isFinite(ageH) || ageH > 24) {
+    console.warn(`WARN: cached Sleeper data is ${Number.isFinite(ageH) ? Math.round(ageH) + 'h' : 'of unknown age'} old — consider: node cli.js pull`);
+  }
+}
+
+// Week -> [ledger names] for the weekly high-score payout. Shared by both commands.
+function weekWinnerNamesByWeek(bundle, current, nameById) {
+  const rosterOwner = new Map(
+    (bundle.rosters[current.season] ?? []).map(r => [r.roster_id, r.owner_id]));
+  const toName = (rid) => nameById.get(rosterOwner.get(rid)) ?? `roster ${rid}`;
+  const weeks = (current.settings?.playoff_week_start ?? 15) - 1;
+  const byWeek = {};
+  for (let w = 1; w <= weeks; w++) {
+    const win = weeklyWinner(bundle.matchups[w]);
+    if (win) byWeek[w] = win.rosterIds.map(toName);
+  }
+  return { weeks, byWeek, toName };
+}
+
 async function cmdKeepers() {
   const bundle = await loadBundle(dataDir);
+  warnIfStale(bundle);
   const players = await loadPlayers(dataDir);
   const current = bundle.chain[0];
   const season = seasonFlag ?? Number(current.season);
@@ -41,28 +72,26 @@ async function cmdKeepers() {
   }
   const board = computeKeeperBoard({
     seasons,
-    rosters: bundle.rosters[current.season],
-    users: bundle.users[current.season],
+    rosters: bundle.rosters[current.season] ?? [],
+    users: bundle.users[current.season] ?? [],
     tradedPicks: bundle.tradedPicks[current.season] ?? [],
     upcomingSeason: String(season),
     rounds: config.rounds,
     overrides: config.basisOverrides,
     playerNames,
   });
-  const nameById = ledgerNameByUserId(bundle.users[current.season]);
+  const nameById = ledgerNameByUserId(bundle.users[current.season] ?? []);
   for (const t of board.teams) t.ownerName = nameById.get(t.ownerId) ?? t.ownerName;
 
   const idx = (year) => Object.fromEntries(
     (bundle.picks[String(year)] ?? []).map(p => [p.player_id, { round: p.round }]));
-  const rosterOwner = new Map(
-    (bundle.rosters[current.season] ?? []).map(r => [r.roster_id, r.owner_id]));
-  const weeks = (current.settings?.playoff_week_start ?? 15) - 1;
-  const weekWinnerNames = {};
-  for (let w = 1; w <= weeks; w++) {
-    const win = weeklyWinner(bundle.matchups[w]);
-    if (win) weekWinnerNames[w] =
-      win.rosterIds.map(rid => nameById.get(rosterOwner.get(rid)) ?? `roster ${rid}`);
-  }
+  const { weeks, byWeek: weekWinnerNames, toName } =
+    weekWinnerNamesByWeek(bundle, current, nameById);
+  const bracketPlaces = finalPlaces(bundle.brackets[current.season]);
+  const placeNames = bracketPlaces
+    ? [bracketPlaces.first, bracketPlaces.second, bracketPlaces.third]
+        .map(rid => (rid != null ? toName(rid) : null))
+    : null;
   let draftOrder = null;
   if (bundle.drafts[current.season]?.draft_order) {
     draftOrder = {};
@@ -77,7 +106,7 @@ async function cmdKeepers() {
       prevSeasonPicks: idx(season - 1), prevPrevSeasonPicks: idx(season - 2),
       weeks, weekWinnerNames,
       ledgerNames: config.owners.map(o => o.ledgerName),
-      draftOrder, amounts: config.amounts,
+      draftOrder, amounts: config.amounts, placeNames,
     });
     console.log(`Wrote sheet "${sheetName}" to ${workbookPath}`);
     console.log(`Backup: ${backupPath}`);
@@ -98,18 +127,11 @@ async function cmdKeepers() {
 
 async function cmdFinances() {
   const bundle = await loadBundle(dataDir);
+  warnIfStale(bundle);
   const current = bundle.chain[0];
   const season = String(seasonFlag ?? current.season);
-  const nameById = ledgerNameByUserId(bundle.users[current.season]);
-  const rosterOwner = new Map(
-    (bundle.rosters[current.season] ?? []).map(r => [r.roster_id, r.owner_id]));
-  const toName = (rid) => nameById.get(rosterOwner.get(rid)) ?? `roster ${rid}`;
-  const weeks = (current.settings?.playoff_week_start ?? 15) - 1;
-  const weekWinners = {};
-  for (let w = 1; w <= weeks; w++) {
-    const win = weeklyWinner(bundle.matchups[w]);
-    if (win) weekWinners[w] = win.rosterIds.map(toName);
-  }
+  const nameById = ledgerNameByUserId(bundle.users[current.season] ?? []);
+  const { byWeek: weekWinners, toName } = weekWinnerNamesByWeek(bundle, current, nameById);
   const bracketPlaces = finalPlaces(bundle.brackets[current.season]);
   const places = bracketPlaces && {
     first: toName(bracketPlaces.first), second: toName(bracketPlaces.second),
