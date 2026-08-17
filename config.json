@@ -3,7 +3,7 @@
   "workbookPath": "../DirtyDozenFantasyFootball.xlsx",
   "financesDir": "..",
   "rounds": 15,
-  "amounts": { "dues": 30, "weeklyPoints": 10, "places": [120, 50, 30] },
+  "amounts": { "dues": 50, "weeklyPoints": 10, "places": [280, 140, 45] },
   "owners": [
     { "sleeperUsername": "AndyMorris", "ledgerName": "Andy" },
     { "sleeperUsername": "zthoreso", "ledgerName": "Thor" },

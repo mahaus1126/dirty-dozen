@@ -8,8 +8,8 @@ import JSZip from 'jszip';
 import { writeKeeperSheet, sheetNameForSeason } from '../lib/excel.js';
 
 test('sheetNameForSeason follows NN-NN pattern', () => {
-  assert.equal(sheetNameForSeason(2026), '25-26 Keepers');
-  assert.equal(sheetNameForSeason(2030), '29-30 Keepers');
+  assert.equal(sheetNameForSeason(2026), '25-26 Keepers (Generated)');
+  assert.equal(sheetNameForSeason(2030), '29-30 Keepers (Generated)');
 });
 
 async function makeSyntheticWorkbook(dir) {
@@ -50,7 +50,7 @@ test('writeKeeperSheet adds the sheet, backs up first, preserves other sheets', 
   await wb.xlsx.readFile(file);
   assert.ok(wb.getWorksheet('Rules and payouts'), 'existing sheet survived');
   assert.equal(wb.getWorksheet('Rules and payouts').getCell('A1').value, 'Some rules text');
-  const sheet = wb.getWorksheet('25-26 Keepers');
+  const sheet = wb.getWorksheet('25-26 Keepers (Generated)');
   assert.ok(sheet, 'new sheet exists');
   assert.equal(sheet.getCell('A2').value, 'mitch');       // owner label on first player row
   assert.equal(sheet.getCell('B2').value, 'Good Keeper');
@@ -71,7 +71,7 @@ test('rerunning replaces the sheet idempotently', async () => {
   await writeKeeperSheet(args);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(file);
-  const matches = wb.worksheets.filter(w => w.name === '25-26 Keepers');
+  const matches = wb.worksheets.filter(w => w.name === '25-26 Keepers (Generated)');
   assert.equal(matches.length, 1);
 });
 
