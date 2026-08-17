@@ -48,6 +48,27 @@ test('3 consecutive keeps exhausts eligibility', () => {
   assert.match(ev.reason, /3 consecutive/);
 });
 
+test('team-scoped: keep by a NEW roster restarts the clock (owner ruling)', () => {
+  const SP = (playerId, round, isKeeper, rosterId) => ({ playerId, round, isKeeper, rosterId });
+  const seasons = [
+    { year: 2022, picks: [SP('x', 5, true, 2)] },   // kept last year by roster 2
+  ];
+  // Roster 8 acquired the player and keeps them: first keep for roster 8.
+  const ev = evaluatePlayer('x', seasons, {}, 8);
+  assert.equal(ev.yearsKept, 0);
+  assert.equal(ev.costRound, 4);   // 5 - 1, not 5 - 4
+});
+
+test('team-scoped: same roster continues the clock', () => {
+  const SP = (playerId, round, isKeeper, rosterId) => ({ playerId, round, isKeeper, rosterId });
+  const seasons = [
+    { year: 2022, picks: [SP('x', 5, true, 2)] },
+  ];
+  const ev = evaluatePlayer('x', seasons, {}, 2);
+  assert.equal(ev.yearsKept, 1);
+  assert.equal(ev.costRound, 1);   // 5 - 4
+});
+
 test('basisOverrides pin a nominal round (collision-bumped history)', () => {
   const ev = evaluatePlayer('x', [S(2025, [P('x', 9, true)]), S(2024, [P('x', 99)])]);
   // actual draft said 9 (bumped), but nominal was 10:

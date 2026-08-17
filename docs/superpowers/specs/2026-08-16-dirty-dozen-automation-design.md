@@ -68,7 +68,7 @@ Rules encoded (from the workbook's "Rules and payouts" sheet, verified against 2
 2. **Cost** — iterative off last year's round: 1st consecutive keep = basis − 1; 2nd = basis − 4; 3rd = basis − 8. (Verified: J. Williams 13→12→8; J. Cook 8→4→1; I. Pacheco 10→6→1.) **Exception — FA pickups:** an undrafted player's first keep is slotted at round 10 exactly (no −1); later years follow the normal offsets off the prior round: 10 → 6 → 1. (Verified: Irving FA→10; Collins FA→10→6.)
 3. **Floor** — cost < 1 becomes round 1, pushing the team's other keepers down as needed.
 4. **Eligibility** — a player is keeper-eligible iff: on the team's current roster; not entering a 4th consecutive kept season; and not drafted in R1–R2 last year *unless* that R1–R2 pick was itself a keeper slot (`is_keeper` distinguishes these).
-5. **Years-kept** — consecutive `is_keeper` picks walking backward through the draft chain; any real (non-keeper) draft pick resets the count. Max 3.
+5. **Years-kept** — consecutive `is_keeper` picks walking backward through the draft chain; any real (non-keeper) draft pick resets the count. Max 3. **Team-scoped (owner ruling 2026-08-16):** the chain only counts keeper picks made by the same roster — a kept player who changes teams restarts as a 1st-year keep for the new team (matches Diggs 2022, D. Johnson 2023, and the rules sheet's "kept by the same team" wording). Basis round stays roster-agnostic: a drafted player's round holds even across a waiver claim (owner ruling; Sutton/Stevenson 2022 were lenient-era exceptions, allowlisted).
 6. **Traded picks** — if the team traded away the pick in a keeper's assigned round, the keeper slides up to the next round the team still owns.
 7. **Collisions** — two keepers assigned the same round: one keeps it, the other takes the next-highest available round. Both retain nominal basis for future years. The rules sheet doesn't say which player moves, so the engine is deterministic: the longer-tenured keeper (more years kept, then earlier draft basis, then alphabetical) holds the round; the other slides up. Flagged in output so the commissioner can override in Sleeper if the owners agreed otherwise.
 
@@ -141,3 +141,4 @@ Season is inferred from the league's `season` field; a `--season` flag overrides
 - Finances: generate dues + weekly winners + place payouts — user approved.
 - Post-migration Sleeper history only; treated as its own league — user directive.
 - Dues status stays off the public page — default accepted.
+- Keep clock resets per team on player movement; waiver claims keep draft-round basis — owner rulings during regression triage, 2026-08-16.

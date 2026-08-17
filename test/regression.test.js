@@ -10,6 +10,7 @@ const engineSeasons = (upToYear) =>
   Object.entries(seasons)
     .map(([year, s]) => ({ year: Number(year), picks: s.picks.map(p => ({
       playerId: p.player_id, round: p.round, isKeeper: p.is_keeper,
+      rosterId: p.roster_id,
     })) }))
     .filter(s => s.year <= upToYear)
     .sort((a, b) => b.year - a.year);
@@ -34,7 +35,7 @@ for (const [prior, next] of [[2021, 2022], [2022, 2023], [2023, 2024], [2024, 20
       const owned = [];
       for (let i = 1; i <= 15; i++) if (!tradedAway.has(i)) owned.push(i);
       const evaluated = kept.map(p => {
-        const ev = evaluatePlayer(p.player_id, hist);
+        const ev = evaluatePlayer(p.player_id, hist, {}, p.roster_id);
         return { playerId: p.player_id, name: p.name, costRound: ev.costRound ?? 99,
                  yearsKept: ev.yearsKept, basisRound: ev.basisRound,
                  eligible: ev.eligible, reason: ev.reason, actualRound: p.round };
