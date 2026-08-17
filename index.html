@@ -6,10 +6,10 @@
 <title>The Dirty Dozen</title>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --ink:#1a202c; --muted:#64748b; --line:#e2e8f0;
-          --good:#15803d; --bad:#b91c1c; --accent:#1d4ed8; }
+          --good:#15803d; --bad:#b91c1c; --accent:#1d4ed8; --pick:rgba(29,78,216,.10); }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#0f172a; --card:#1e293b; --ink:#e2e8f0; --muted:#94a3b8; --line:#334155;
-            --good:#4ade80; --bad:#f87171; --accent:#60a5fa; }
+            --good:#4ade80; --bad:#f87171; --accent:#60a5fa; --pick:rgba(96,165,250,.20); }
   }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
@@ -33,6 +33,11 @@
   .muted { color:var(--muted); } .status { text-align:center; padding:40px; color:var(--muted); }
   section { display:none; } section.active { display:block; }
   pre.rules { white-space:pre-wrap; font:inherit; }
+  tr.sel { cursor:pointer; } tr.sel:hover td { background:var(--pick); }
+  tr.picked td { background:var(--pick); }
+  .slots { margin-top:8px; padding-top:6px; border-top:1px solid var(--line);
+           font-size:.82rem; color:var(--muted); }
+  .slots b { color:var(--ink); font-weight:600; }
 </style>
 </head>
 <body>
@@ -48,13 +53,16 @@
 </nav>
 <main>
   <div class="status" id="status">Fetching live data from Sleeper…</div>
-  <section id="keepers" class="active"><div class="grid" id="keeperGrid"></div></section>
+  <section id="keepers" class="active">
+    <div class="grid" id="keeperGrid"></div>
+    <div class="muted" style="margin-top:8px">Tap up to 3 players on a team to preview their final draft slots (collisions and traded picks resolved).</div>
+  </section>
   <section id="weekly"><div class="card" id="weeklyCard"></div></section>
   <section id="standings"><div class="card" id="standingsCard"></div></section>
   <section id="rules"><div class="card"><pre class="rules" id="rulesText"></pre></div></section>
 </main>
 <script type="module">
-import { computeKeeperBoard } from './lib/keepers.js';
+import { computeKeeperBoard, resolveKeeperSlots } from './lib/keepers.js';
 import { weeklyWinner } from './lib/finances.js';
 
 const LEAGUE_ID = '1389387813203484672';
@@ -86,6 +94,9 @@ async function playerNames(neededIds) {
 }
 
 async function load() {
+  // Committed at the repo root, so it is same-origin on Pages and served locally too.
+  // Null (missing/unparseable) degrades to no overrides + a generic payout line.
+  const config = await j('./config.json').catch(() => null);
   const chain = [];
   let id = LEAGUE_ID;
   while (id && id !== '0') { const lg = await j(`${API}/league/${id}`); chain.push(lg); id = lg.previous_league_id; }
@@ -110,33 +121,71 @@ async function load() {
   const board = computeKeeperBoard({
     seasons, rosters, users, tradedPicks,
     upcomingSeason: current.season, rounds: 15, playerNames: names,
+    overrides: config?.basisOverrides ?? {},
   });
   renderKeepers(board);
-  await renderWeekly(current, users, rosters);
+  await renderWeekly(current, users, rosters, config);
   renderStandings(users, rosters);
-  $('rulesText').textContent = RULES;
+  $('rulesText').textContent = rulesText(config?.amounts);
   $('status').style.display = 'none';
 }
 
+// What-if keeper picker state: team index -> Set of chosen playerIds (max 3).
+const MAX_KEEPERS = 3;
+const picked = new Map();
+let boardCache = null;
+
 function renderKeepers(board) {
-  $('keeperGrid').innerHTML = board.teams.map(t => `
+  boardCache = board;
+  picked.clear();
+  $('keeperGrid').innerHTML = board.teams.map((t, ti) => `
     <div class="card">
       <h2>${esc(t.teamName || t.ownerName)}</h2>
       <div class="tn">@${esc(t.ownerName)}</div>
       <table>
         <tr><th>Player</th><th>Pos</th><th>Keeper cost</th><th>Yrs kept</th></tr>
         ${t.players.map(p => `
-          <tr>
+          <tr${p.eligible ? ` class="sel" data-team="${ti}" data-player="${esc(p.playerId)}"` : ''}>
             <td>${esc(p.name)}</td><td class="muted">${esc(p.position)}</td>
             <td>${p.eligible ? `<span class="ok">R${p.costRound}</span>`
                              : `<span class="no" title="${esc(p.reason ?? '')}">N/A</span>`}</td>
             <td class="muted">${p.yearsKept || ''}</td>
           </tr>`).join('')}
       </table>
+      <div class="slots" id="slots-${ti}" hidden></div>
     </div>`).join('');
 }
 
-async function renderWeekly(current, users, rosters) {
+// Delegated: #keeperGrid is static markup, so this survives every re-render.
+$('keeperGrid').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr.sel');
+  if (!tr) return;
+  const ti = Number(tr.dataset.team);
+  const pid = tr.dataset.player;
+  const set = picked.get(ti) ?? new Set();
+  if (set.has(pid)) set.delete(pid);
+  else if (set.size < MAX_KEEPERS) set.add(pid);
+  else return;                       // at the cap — ignore the click
+  picked.set(ti, set);
+  tr.classList.toggle('picked', set.has(pid));
+  renderSlots(ti);
+});
+
+function renderSlots(ti) {
+  const el = $(`slots-${ti}`);
+  const team = boardCache.teams[ti];
+  const chosenIds = picked.get(ti) ?? new Set();
+  if (!chosenIds.size) { el.hidden = true; el.innerHTML = ''; return; }
+  const chosen = team.players.filter(p => p.eligible && chosenIds.has(p.playerId));
+  el.hidden = false;
+  el.innerHTML = 'Slots: ' + resolveKeeperSlots(chosen, team.ownedRounds).map(s => {
+    const dir = !s.moved ? ''
+      : (s.assignedRound < s.costRound ? ' (slid up)' : ' (pushed down)');
+    return `<b>${esc(s.name)}</b> → R${s.assignedRound}${dir}`;
+  }).join('<br>');
+}
+
+async function renderWeekly(current, users, rosters, config) {
   const userById = new Map(users.map(u => [u.user_id, u]));
   const ownerOf = new Map(rosters.map(r => [r.roster_id,
     userById.get(r.owner_id)?.display_name ?? `roster ${r.roster_id}`]));
@@ -151,13 +200,14 @@ async function renderWeekly(current, users, rosters) {
     return `<tr><td>Week ${i + 1}</td><td>${win ? esc(who.join(' / ')) : '<span class="muted">—</span>'}</td>
             <td class="muted">${win ? win.points.toFixed(2) : ''}</td></tr>`;
   }).join('');
+  const weeklyAmt = config?.amounts?.weeklyPoints ?? 10;
   const tallyRows = [...tally.entries()].sort((a, b) => b[1] - a[1])
-    .map(([n, c]) => `<tr><td>${esc(n)}</td><td>${c}</td></tr>`).join('');
+    .map(([n, c]) => `<tr><td>${esc(n)}</td><td>${c}</td><td>$${c * weeklyAmt}</td></tr>`).join('');
   $('weeklyCard').innerHTML = `
     <h2>Weekly high scores</h2>
     <table><tr><th>Week</th><th>Winner</th><th>Points</th></tr>${rows}</table>
     ${tallyRows ? `<h2 style="margin-top:16px">Wins tally</h2>
-    <table><tr><th>Owner</th><th>Weeks won</th></tr>${tallyRows}</table>` : ''}`;
+    <table><tr><th>Owner</th><th>Weeks won</th><th>$</th></tr>${tallyRows}</table>` : ''}`;
 }
 
 function renderStandings(users, rosters) {
@@ -171,14 +221,15 @@ function renderStandings(users, rosters) {
       const u = userById.get(r.owner_id);
       return `<tr><td>${i + 1}</td><td>${esc(u?.metadata?.team_name || u?.display_name || '?')}</td>
         <td>${r.settings?.wins ?? 0}</td><td>${r.settings?.losses ?? 0}</td>
-        <td class="muted">${r.settings?.fpts ?? 0}</td></tr>`;
+        <td class="muted">${((r.settings?.fpts ?? 0)
+          + (r.settings?.fpts_decimal ?? 0) / 100).toFixed(2)}</td></tr>`;
     }).join('')}</table>`;
 }
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const RULES = `Dirty Dozen Keeper Rules
+const RULES_BODY = `Dirty Dozen Keeper Rules
 
 - 3 keepers max. You are not required to keep any players.
 - No player drafted in the first or second round may be kept the next year.
@@ -196,9 +247,17 @@ Keeper cost (from the round taken the previous year):
   next available round. Two keepers in the same round: one takes the next highest
   available round (both still count at their nominal round going forward).
 
-Draft order is chosen by managers in reverse order of last season's standings.
+Draft order is chosen by managers in reverse order of last season's standings.`;
 
-Payouts: $50/player. 1st $280, 2nd $140, 3rd $45, weekly high score $10.`;
+// Only the payout line is data-driven; the rest of the rules are static text.
+function rulesText(amounts) {
+  const places = amounts?.places ?? [];
+  const payout = amounts && places.length >= 3
+    ? `Payouts: $${amounts.dues}/player. 1st $${places[0]}, 2nd $${places[1]}, ` +
+      `3rd $${places[2]}, weekly high score $${amounts.weeklyPoints}.`
+    : 'Payouts: see league settings.';
+  return `${RULES_BODY}\n\n${payout}`;
+}
 
 load().catch(err => { $('status').textContent = `Failed to load: ${err.message}`; });
 </script>
