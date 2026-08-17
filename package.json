@@ -8,5 +8,8 @@
   },
   "dependencies": {
     "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.1"
   }
 }

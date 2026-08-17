@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { writeKeeperSheet, sheetNameForSeason } from '../lib/excel.js';
 
 test('sheetNameForSeason follows NN-NN pattern', () => {
@@ -72,4 +73,33 @@ test('rerunning replaces the sheet idempotently', async () => {
   await wb.xlsx.readFile(file);
   const matches = wb.worksheets.filter(w => w.name === '25-26 Keepers');
   assert.equal(matches.length, 1);
+});
+
+test('existing formulas and merged cells survive the rewrite', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ddxl-'));
+  const wb0 = new ExcelJS.Workbook();
+  const old = wb0.addWorksheet('24-25 Keepers');
+  old.getCell('M3').value = { formula: 'COUNTIF(J3:J20,L3)', result: 2 };
+  old.mergeCells('A1:B1');
+  old.getCell('A1').value = 'Merged Header';
+  const file = path.join(dir, 'wb.xlsx');
+  await wb0.xlsx.writeFile(file);
+  await writeKeeperSheet({
+    workbookPath: file, season: 2026, board: BOARD,
+    prevSeasonPicks: {}, prevPrevSeasonPicks: {}, weeks: 14, weekWinnerNames: {},
+    ledgerNames: ['mitch'], draftOrder: null, amounts: { places: [120, 50, 30] },
+  });
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(file);
+  const survived = wb.getWorksheet('24-25 Keepers');
+  assert.equal(survived.getCell('M3').value.formula, 'COUNTIF(J3:J20,L3)');
+  assert.equal(survived.getCell('A1').value, 'Merged Header');
+  // exceljs's own reader doesn't parse calcPr attributes back into
+  // Workbook#calcProperties (verified: it always deserializes to {}, even for
+  // a bare writeFile->readFile round trip with no other code involved), so we
+  // check the persisted XML directly for what Excel actually reads on open.
+  const buf = await fs.readFile(file);
+  const zip = await JSZip.loadAsync(buf);
+  const workbookXml = await zip.file('xl/workbook.xml').async('string');
+  assert.match(workbookXml, /<calcPr[^>]*\bfullCalcOnLoad="1"/);
 });
