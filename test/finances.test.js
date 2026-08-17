@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { weeklyWinner, finalPlaces, parseCsv, serializeCsv, buildLedger }
+import { weeklyWinner, finalPlaces, parseCsv, serializeCsv, buildLedger, findOrphanedRows }
   from '../lib/finances.js';
 
 test('weeklyWinner finds the top scorer', () => {
@@ -67,4 +67,32 @@ test('buildLedger adds place payouts when places provided', () => {
   assert.deepEqual(pay.map(r => [r[1], r[2], r[4]]), [
     ['B', '120', '1st Place'], ['A', '50', '2nd Place'], ['D', '30', '3rd Place'],
   ]);
+});
+
+test('buildLedger preserves hand-edited amounts on computed rows', () => {
+  const existing = [['2026', 'Mitch', '15', 'debit', 'League Dues', '', 'paid']]; // partial refund
+  const rows = buildLedger({
+    season: '2026', ledgerNames: ['Mitch'],
+    amounts: { dues: 30, weeklyPoints: 10, places: [120, 50, 30] },
+    weekWinners: {}, places: null, existingRows: existing,
+  });
+  const due = rows.find(r => r[4] === 'League Dues');
+  assert.equal(due[2], '15');   // hand edit wins
+  assert.equal(due[6], 'paid');
+});
+
+test('findOrphanedRows flags computed-label rows for unknown members', () => {
+  const rows = [
+    ['2026', 'Andy', '30', 'debit', 'League Dues', '', 'paid'],     // renamed away
+    ['2026', 'Andrew', '30', 'debit', 'League Dues', '', 'pending'],
+    ['2026', 'Whoever', '5', 'debit', 'Side Bet', '', 'pending'],   // manual, ignored
+  ];
+  const orphans = findOrphanedRows(rows, ['Andrew', 'Thor']);
+  assert.deepEqual(orphans.map(r => r[1]), ['Andy']);
+});
+
+test('serializeCsv quotes bare carriage returns so rows survive round-trip', () => {
+  const out = serializeCsv(['A'], [['has\rcr']]);
+  const back = parseCsv(out);
+  assert.deepEqual(back.rows, [['has\rcr']]);
 });
