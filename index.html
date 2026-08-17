@@ -55,6 +55,7 @@
 </main>
 <script type="module">
 import { computeKeeperBoard } from './lib/keepers.js';
+import { weeklyWinner } from './lib/finances.js';
 
 const LEAGUE_ID = '1389387813203484672';
 const API = 'https://api.sleeper.app/v1';
@@ -144,15 +145,11 @@ async function renderWeekly(current, users, rosters) {
     j(`${API}/league/${current.league_id}/matchups/${i + 1}`).catch(() => [])));
   const tally = new Map();
   const rows = weeks.map((ms, i) => {
-    let best = 0, who = [];
-    for (const m of ms ?? []) {
-      const pts = m.points ?? 0;
-      if (pts > best) { best = pts; who = [ownerOf.get(m.roster_id)]; }
-      else if (pts === best && pts > 0) who.push(ownerOf.get(m.roster_id));
-    }
-    if (best > 0) who.forEach(w => tally.set(w, (tally.get(w) ?? 0) + 1));
-    return `<tr><td>Week ${i + 1}</td><td>${best > 0 ? esc(who.join(' / ')) : '<span class="muted">—</span>'}</td>
-            <td class="muted">${best > 0 ? best.toFixed(2) : ''}</td></tr>`;
+    const win = weeklyWinner(ms);
+    const who = win ? win.rosterIds.map(rid => ownerOf.get(rid)) : [];
+    if (win) who.forEach(w => tally.set(w, (tally.get(w) ?? 0) + 1));
+    return `<tr><td>Week ${i + 1}</td><td>${win ? esc(who.join(' / ')) : '<span class="muted">—</span>'}</td>
+            <td class="muted">${win ? win.points.toFixed(2) : ''}</td></tr>`;
   }).join('');
   const tallyRows = [...tally.entries()].sort((a, b) => b[1] - a[1])
     .map(([n, c]) => `<tr><td>${esc(n)}</td><td>${c}</td></tr>`).join('');
