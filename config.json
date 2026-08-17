@@ -18,5 +18,5 @@
     { "sleeperUsername": "esalata", "ledgerName": "Texas" },
     { "sleeperUsername": "SrBrown", "ledgerName": "Stephen" }
   ],
-  "basisOverrides": {}
+  "basisOverrides": { "4892": { "basisRound": 10 } }
 }
