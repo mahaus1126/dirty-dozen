@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Dirty Dozen</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1a202c; --muted:#64748b; --line:#e2e8f0;
+          --good:#15803d; --bad:#b91c1c; --accent:#1d4ed8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f172a; --card:#1e293b; --ink:#e2e8f0; --muted:#94a3b8; --line:#334155;
+            --good:#4ade80; --bad:#f87171; --accent:#60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:20px 16px 8px; text-align:center; }
+  h1 { margin:0; font-size:1.6rem; } .sub { color:var(--muted); font-size:.9rem; }
+  nav { display:flex; gap:8px; justify-content:center; padding:12px; flex-wrap:wrap;
+        position:sticky; top:0; background:var(--bg); }
+  nav button { border:1px solid var(--line); background:var(--card); color:var(--ink);
+               padding:8px 14px; border-radius:20px; cursor:pointer; font-size:.9rem; }
+  nav button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  main { max-width:1080px; margin:0 auto; padding:8px 12px 48px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:12px 14px; overflow-x:auto; }
+  .card h2 { margin:0 0 2px; font-size:1.05rem; }
+  .card .tn { color:var(--muted); font-size:.82rem; margin-bottom:8px; }
+  table { border-collapse:collapse; width:100%; font-size:.85rem; }
+  th { text-align:left; color:var(--muted); font-weight:600; padding:3px 8px 3px 0; }
+  td { padding:3px 8px 3px 0; border-top:1px solid var(--line); white-space:nowrap; }
+  .ok { color:var(--good); font-weight:600; } .no { color:var(--bad); }
+  .muted { color:var(--muted); } .status { text-align:center; padding:40px; color:var(--muted); }
+  section { display:none; } section.active { display:block; }
+  pre.rules { white-space:pre-wrap; font:inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>The Dirty Dozen</h1>
+  <div class="sub" id="subtitle">loading…</div>
+</header>
+<nav>
+  <button data-tab="keepers" class="active">Keepers</button>
+  <button data-tab="weekly">Weekly $</button>
+  <button data-tab="standings">Standings</button>
+  <button data-tab="rules">Rules</button>
+</nav>
+<main>
+  <div class="status" id="status">Fetching live data from Sleeper…</div>
+  <section id="keepers" class="active"><div class="grid" id="keeperGrid"></div></section>
+  <section id="weekly"><div class="card" id="weeklyCard"></div></section>
+  <section id="standings"><div class="card" id="standingsCard"></div></section>
+  <section id="rules"><div class="card"><pre class="rules" id="rulesText"></pre></div></section>
+</main>
+<script type="module">
+import { computeKeeperBoard } from './lib/keepers.js';
+
+const LEAGUE_ID = '1389387813203484672';
+const API = 'https://api.sleeper.app/v1';
+const $ = (id) => document.getElementById(id);
+const j = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(u); return r.json(); };
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('section').forEach(s =>
+    s.classList.toggle('active', s.id === b.dataset.tab));
+});
+
+async function playerNames(neededIds) {
+  const KEY = 'dd_players_v1';
+  try {
+    const c = JSON.parse(localStorage.getItem(KEY));
+    if (c && Date.now() - c.ts < 86400e3 && neededIds.every(id => c.map[id])) return c.map;
+  } catch {}
+  const all = await j(`${API}/players/nfl`);   // ~5 MB, then trimmed + cached
+  const map = {};
+  for (const id of neededIds) {
+    const p = all[id];
+    map[id] = p ? { name: `${p.first_name} ${p.last_name}`, position: p.position ?? '' }
+                : { name: id, position: '' };
+  }
+  try { localStorage.setItem(KEY, JSON.stringify({ ts: Date.now(), map })); } catch {}
+  return map;
+}
+
+async function load() {
+  const chain = [];
+  let id = LEAGUE_ID;
+  while (id && id !== '0') { const lg = await j(`${API}/league/${id}`); chain.push(lg); id = lg.previous_league_id; }
+  const current = chain[0];
+  $('subtitle').textContent = `${current.season} season — live from Sleeper`;
+  const [users, rosters] = await Promise.all([
+    j(`${API}/league/${current.league_id}/users`),
+    j(`${API}/league/${current.league_id}/rosters`),
+  ]);
+  const seasons = [];
+  await Promise.all(chain.map(async lg => {
+    const drafts = await j(`${API}/league/${lg.league_id}/drafts`);
+    if (!drafts[0]) return;
+    if (Number(lg.season) < Number(current.season)) {
+      seasons.push({ year: Number(lg.season),
+                     picks: await j(`${API}/draft/${drafts[0].draft_id}/picks`) });
+    }
+  }));
+  const tradedPicks = await j(`${API}/league/${current.league_id}/traded_picks`);
+  const ids = rosters.flatMap(r => r.players ?? []);
+  const names = await playerNames(ids);
+  const board = computeKeeperBoard({
+    seasons, rosters, users, tradedPicks,
+    upcomingSeason: current.season, rounds: 15, playerNames: names,
+  });
+  renderKeepers(board);
+  await renderWeekly(current, users, rosters);
+  renderStandings(users, rosters);
+  $('rulesText').textContent = RULES;
+  $('status').style.display = 'none';
+}
+
+function renderKeepers(board) {
+  $('keeperGrid').innerHTML = board.teams.map(t => `
+    <div class="card">
+      <h2>${esc(t.teamName || t.ownerName)}</h2>
+      <div class="tn">@${esc(t.ownerName)}</div>
+      <table>
+        <tr><th>Player</th><th>Pos</th><th>Keeper cost</th><th>Yrs kept</th></tr>
+        ${t.players.map(p => `
+          <tr>
+            <td>${esc(p.name)}</td><td class="muted">${esc(p.position)}</td>
+            <td>${p.eligible ? `<span class="ok">R${p.costRound}</span>`
+                             : `<span class="no" title="${esc(p.reason ?? '')}">N/A</span>`}</td>
+            <td class="muted">${p.yearsKept || ''}</td>
+          </tr>`).join('')}
+      </table>
+    </div>`).join('');
+}
+
+async function renderWeekly(current, users, rosters) {
+  const userById = new Map(users.map(u => [u.user_id, u]));
+  const ownerOf = new Map(rosters.map(r => [r.roster_id,
+    userById.get(r.owner_id)?.display_name ?? `roster ${r.roster_id}`]));
+  const lastWeek = (current.settings?.playoff_week_start ?? 15) - 1;
+  const weeks = await Promise.all(Array.from({ length: lastWeek }, (_, i) =>
+    j(`${API}/league/${current.league_id}/matchups/${i + 1}`).catch(() => [])));
+  const tally = new Map();
+  const rows = weeks.map((ms, i) => {
+    let best = 0, who = [];
+    for (const m of ms ?? []) {
+      const pts = m.points ?? 0;
+      if (pts > best) { best = pts; who = [ownerOf.get(m.roster_id)]; }
+      else if (pts === best && pts > 0) who.push(ownerOf.get(m.roster_id));
+    }
+    if (best > 0) who.forEach(w => tally.set(w, (tally.get(w) ?? 0) + 1));
+    return `<tr><td>Week ${i + 1}</td><td>${best > 0 ? esc(who.join(' / ')) : '<span class="muted">—</span>'}</td>
+            <td class="muted">${best > 0 ? best.toFixed(2) : ''}</td></tr>`;
+  }).join('');
+  const tallyRows = [...tally.entries()].sort((a, b) => b[1] - a[1])
+    .map(([n, c]) => `<tr><td>${esc(n)}</td><td>${c}</td></tr>`).join('');
+  $('weeklyCard').innerHTML = `
+    <h2>Weekly high scores</h2>
+    <table><tr><th>Week</th><th>Winner</th><th>Points</th></tr>${rows}</table>
+    ${tallyRows ? `<h2 style="margin-top:16px">Wins tally</h2>
+    <table><tr><th>Owner</th><th>Weeks won</th></tr>${tallyRows}</table>` : ''}`;
+}
+
+function renderStandings(users, rosters) {
+  const userById = new Map(users.map(u => [u.user_id, u]));
+  const sorted = [...rosters].sort((a, b) =>
+    (b.settings?.wins ?? 0) - (a.settings?.wins ?? 0) ||
+    (b.settings?.fpts ?? 0) - (a.settings?.fpts ?? 0));
+  $('standingsCard').innerHTML = `<h2>Standings</h2>
+    <table><tr><th>#</th><th>Team</th><th>W</th><th>L</th><th>PF</th></tr>
+    ${sorted.map((r, i) => {
+      const u = userById.get(r.owner_id);
+      return `<tr><td>${i + 1}</td><td>${esc(u?.metadata?.team_name || u?.display_name || '?')}</td>
+        <td>${r.settings?.wins ?? 0}</td><td>${r.settings?.losses ?? 0}</td>
+        <td class="muted">${r.settings?.fpts ?? 0}</td></tr>`;
+    }).join('')}</table>`;
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const RULES = `Dirty Dozen Keeper Rules
+
+- 3 keepers max. You are not required to keep any players.
+- No player drafted in the first or second round may be kept the next year.
+- You may only keep a player for 3 consecutive seasons (per team - the clock
+  restarts if a kept player changes teams).
+
+Keeper cost (from the round taken the previous year):
+- 1st year kept: previous round - 1
+- 2nd year kept: previous round - 4
+- 3rd year kept: previous round - 8
+- Waiver pickups never drafted that season: round 10, then 6, then 1.
+- If the cost would be round 0 or less, the player takes the team's 1st round pick
+  and pushes other picks downstream as necessary.
+- If you trade the draft pick a keeper would occupy, the player moves up to the
+  next available round. Two keepers in the same round: one takes the next highest
+  available round (both still count at their nominal round going forward).
+
+Draft order is chosen by managers in reverse order of last season's standings.
+
+Payouts: $50/player. 1st $280, 2nd $140, 3rd $45, weekly high score $10.`;
+
+load().catch(err => { $('status').textContent = `Failed to load: ${err.message}`; });
+</script>
+</body>
+</html>

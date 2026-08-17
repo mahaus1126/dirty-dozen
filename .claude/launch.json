@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "dd-page", "runtimeExecutable": "node", "runtimeArgs": ["scripts/serve.js"], "port": 8123 }
+  ]
+}
