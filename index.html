@@ -143,10 +143,11 @@ function renderKeepers(board) {
       <h2>${esc(t.teamName || t.ownerName)}</h2>
       <div class="tn">@${esc(t.ownerName)}</div>
       <table>
-        <tr><th>Player</th><th>Pos</th><th>Keeper cost</th><th>Yrs kept</th></tr>
+        <tr><th>Player</th><th>Pos</th><th>Drafted</th><th>Keeper cost</th><th>Yrs kept</th></tr>
         ${t.players.map(p => `
           <tr${p.eligible ? ` class="sel" data-team="${ti}" data-player="${esc(p.playerId)}"` : ''}>
             <td>${esc(p.name)}</td><td class="muted">${esc(p.position)}</td>
+            <td>${p.basisRound === 'FA' ? '<span class="muted">FA</span>' : `R${p.basisRound}`}</td>
             <td>${p.eligible ? `<span class="ok">R${p.costRound}</span>`
                              : `<span class="no" title="${esc(p.reason ?? '')}">N/A</span>`}</td>
             <td class="muted">${p.yearsKept || ''}</td>
