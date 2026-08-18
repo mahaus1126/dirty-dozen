@@ -74,7 +74,7 @@
   <div class="status" id="status">Fetching live data from Sleeper…</div>
   <section id="keepers" class="active">
     <div class="grid" id="keeperGrid"></div>
-    <div class="muted" style="margin-top:8px">Tap a player for their recent draft history. Check up to 3 Keep boxes on a team to preview final keeper slots (collisions and traded picks resolved).</div>
+    <div class="muted" style="margin-top:8px">Tap a player for their recent draft history. Check up to 3 Keep boxes on a team to preview final keeper slots (collisions and traded picks resolved). Selections save on this device — the official call still happens in Sleeper.</div>
   </section>
   <section id="weekly"><div class="card" id="weeklyCard"></div></section>
   <section id="standings"><div class="card" id="standingsCard"></div></section>
@@ -152,6 +152,7 @@ async function load() {
   chainCache = chain;
   preDraftCurrent = current.status === 'pre_draft';
   renderKeepers(board);
+  restoreKeeps();
   await renderWeekly(current, users, rosters, config);
   renderStandings(users, rosters);
   $('rulesText').textContent = rulesText(config?.amounts);
@@ -218,7 +219,42 @@ $('keeperGrid').addEventListener('change', (e) => {
   picked.set(ti, set);
   cb.closest('tr').classList.toggle('picked', cb.checked);
   renderSlots(ti);
+  saveKeeps();
 });
+
+// Keep-toggle persistence: per browser via localStorage, scoped to the season
+// so last year's picks never leak into a new draft. Saved players that left
+// the roster or lost eligibility are silently skipped on restore.
+const KEEPS_KEY = 'dd_keeps_v1';
+
+function saveKeeps() {
+  try {
+    const byTeam = {};
+    for (const [ti, set] of picked) {
+      if (set.size) byTeam[boardCache.teams[ti].rosterId] = [...set];
+    }
+    localStorage.setItem(KEEPS_KEY,
+      JSON.stringify({ season: boardCache.upcomingSeason, byTeam }));
+  } catch {}
+}
+
+function restoreKeeps() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEEPS_KEY)); } catch {}
+  if (!saved || saved.season !== boardCache.upcomingSeason) return;
+  boardCache.teams.forEach((t, ti) => {
+    const set = new Set();
+    for (const pid of saved.byTeam?.[t.rosterId] ?? []) {
+      if (set.size >= MAX_KEEPERS) break;
+      const p = t.players.find(x => x.playerId === pid);
+      if (!p || !p.eligible) continue;
+      set.add(pid);
+      const cb = document.querySelector(`input.pick[data-team="${ti}"][data-player="${pid}"]`);
+      if (cb) { cb.checked = true; cb.closest('tr').classList.add('picked'); }
+    }
+    if (set.size) { picked.set(ti, set); renderSlots(ti); }
+  });
+}
 
 // Row tap = player history sub-card (the Keep column is reserved for the checkbox).
 $('keeperGrid').addEventListener('click', (e) => {
