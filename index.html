@@ -53,7 +53,7 @@
   .hist { margin-top:10px; border-top:1px solid var(--line); }
   .hist > div { padding:6px 0; border-bottom:1px solid var(--line); font-size:.88rem;
                 display:flex; justify-content:space-between; gap:12px; }
-  .hist .yr { color:var(--muted); }
+  .hist .yr { color:var(--muted); white-space:nowrap; }
   .kbadge { display:inline-block; font-size:.72rem; padding:1px 6px; border-radius:8px;
             background:var(--pick); color:var(--accent); margin-left:6px; }
   .pc-note { margin-top:10px; font-size:.85rem; }
@@ -149,6 +149,8 @@ async function load() {
     overrides: config?.basisOverrides ?? {},
   });
   histCache = buildHistCache(seasons, users, rosters);
+  chainCache = chain;
+  preDraftCurrent = current.status === 'pre_draft';
   renderKeepers(board);
   await renderWeekly(current, users, rosters, config);
   renderStandings(users, rosters);
@@ -161,6 +163,10 @@ const MAX_KEEPERS = 3;
 const picked = new Map();
 let boardCache = null;
 let histCache = null;
+let chainCache = null;
+let preDraftCurrent = false;
+let txnEventsPromise = null;
+let currentCardPid = null;
 
 // Owner names are looked up through the CURRENT rosters — roster_id -> owner has
 // been stable in this league since 2021, so historical picks resolve correctly.
@@ -222,31 +228,127 @@ $('keeperGrid').addEventListener('click', (e) => {
   openPlayerCard(Number(tr.dataset.team), tr.dataset.player);
 });
 
+// --- Player movement history (trades / waivers / FA moves) -----------------
+// Fetched lazily on the first sub-card open: every completed transaction for
+// the seasons in the 3-draft history window (+ the current offseason league),
+// trimmed to rostered players and cached in localStorage for an hour.
+const TXN_KEY = 'dd_txns_v1';
+
+function ensureTransactions() {
+  if (txnEventsPromise) return txnEventsPromise;
+  txnEventsPromise = (async () => {
+    try {
+      const c = JSON.parse(localStorage.getItem(TXN_KEY));
+      if (c && Date.now() - c.ts < 3600e3) return c.events;
+    } catch {}
+    const currentYear = Number(chainCache[0].season);
+    const leagues = chainCache.filter(lg => Number(lg.season) >= currentYear - 3);
+    const rostered = new Set(boardCache.teams.flatMap(t => t.players.map(p => p.playerId)));
+    const events = {};   // player_id -> [{y, w, kind, from?, to?}]
+    await Promise.all(leagues.flatMap(lg =>
+      Array.from({ length: 18 }, (_, i) =>
+        j(`${API}/league/${lg.league_id}/transactions/${i + 1}`).catch(() => [])
+          .then(txns => {
+            for (const t of txns ?? []) {
+              if (t.status !== 'complete') continue;
+              const y = Number(lg.season);
+              const w = t.leg ?? (i + 1);
+              const handled = new Set();
+              for (const [pid, rid] of Object.entries(t.adds ?? {})) {
+                if (!rostered.has(pid)) continue;
+                handled.add(pid);
+                const from = t.drops ? t.drops[pid] : undefined;
+                (events[pid] ??= []).push(
+                  t.type === 'trade'
+                    ? { y, w, kind: 'trade', from, to: rid }
+                    : { y, w, kind: t.type === 'waiver' ? 'claim' : 'fa', to: rid });
+              }
+              for (const [pid, rid] of Object.entries(t.drops ?? {})) {
+                if (!rostered.has(pid) || handled.has(pid)) continue;
+                (events[pid] ??= []).push(
+                  t.type === 'trade'
+                    ? { y, w, kind: 'trade', from: rid }
+                    : { y, w, kind: 'drop', from: rid });
+              }
+            }
+          }))));
+    try { localStorage.setItem(TXN_KEY, JSON.stringify({ ts: Date.now(), events })); } catch {}
+    return events;
+  })();
+  return txnEventsPromise;
+}
+
+function moveLabel(ev, owner) {
+  if (ev.kind === 'trade') {
+    if (ev.from != null && ev.to != null) return `traded @${owner(ev.from)} → @${owner(ev.to)}`;
+    if (ev.to != null) return `acquired by trade → @${owner(ev.to)}`;
+    return `traded away by @${owner(ev.from)}`;
+  }
+  if (ev.kind === 'claim') return `claimed off waivers by @${owner(ev.to)}`;
+  if (ev.kind === 'fa') return `added as FA by @${owner(ev.to)}`;
+  return `dropped by @${owner(ev.from)}`;
+}
+
+// Drafts (week 0) and movement events interleave into one reverse-chronological
+// timeline. Capped so a churned bench player can't produce an endless card.
+function histRows(pid, events) {
+  const owner = (rid) => histCache.ownerByRoster.get(rid) ?? `roster ${rid}`;
+  const rows = [];
+  for (const { year, picks } of histCache.yearsDesc) {
+    const pk = picks.find(x => x.player_id === pid);
+    rows.push({ y: year, w: 0, html: pk
+      ? `<div><span class="yr">${year} draft</span><span>R${pk.round} &middot; @${esc(owner(pk.roster_id))}${pk.is_keeper ? '<span class="kbadge">keeper slot</span>' : ''}</span></div>`
+      : `<div><span class="yr">${year} draft</span><span class="muted">not drafted</span></div>` });
+  }
+  for (const ev of events ?? []) {
+    const when = (preDraftCurrent && ev.y === Number(boardCache.upcomingSeason))
+      ? `${ev.y} offseason` : `${ev.y} wk ${ev.w}`;
+    rows.push({ y: ev.y, w: ev.w + 0.5,
+      html: `<div><span class="yr">${when}</span><span>${esc(moveLabel(ev, owner))}</span></div>` });
+  }
+  rows.sort((a, b) => (b.y - a.y) || (b.w - a.w));
+  const capped = rows.slice(0, 10);
+  const more = rows.length > capped.length
+    ? `<div><span class="yr"></span><span class="muted">+${rows.length - capped.length} earlier entries</span></div>` : '';
+  return capped.map(r => r.html).join('') + more;
+}
+
 function openPlayerCard(ti, pid) {
   const team = boardCache?.teams[ti];
   const p = team?.players.find(x => x.playerId === pid);
   if (!p || !histCache) return;
-  let lastPick = null, lastYear = null;
-  const rows = histCache.yearsDesc.map(({ year, picks }) => {
-    const pk = picks.find(x => x.player_id === pid);
-    if (!pk) return `<div><span class="yr">${year}</span><span class="muted">not drafted</span></div>`;
-    if (!lastPick) { lastPick = pk; lastYear = year; }
-    const owner = histCache.ownerByRoster.get(pk.roster_id) ?? `roster ${pk.roster_id}`;
-    const badge = pk.is_keeper ? '<span class="kbadge">keeper slot</span>' : '';
-    return `<div><span class="yr">${year}</span><span>R${pk.round} &middot; @${esc(owner)}${badge}</span></div>`;
-  }).join('');
-  const moved = lastPick && lastPick.roster_id !== team.rosterId
-    ? `<div class="pc-note muted">On @${esc(team.ownerName)}'s roster now — changed teams since the ${lastYear} draft (trade or waivers).</div>`
-    : '';
+  currentCardPid = pid;
   const yrs = p.yearsKept ? ` &middot; kept ${p.yearsKept} straight season${p.yearsKept > 1 ? 's' : ''}` : '';
   const keeper = p.eligible
     ? `<div class="pc-note">${esc(boardCache.upcomingSeason)} keeper cost: <span class="ok">R${p.costRound}</span>${yrs}</div>`
     : `<div class="pc-note"><span class="no">Not keeper-eligible</span> — ${esc(p.reason ?? '')}</div>`;
-  $('pcBody').innerHTML = `
-    <h3>${esc(p.name)}</h3>
-    <div class="muted">${esc(p.position)} &middot; ${esc(team.teamName || team.ownerName)} (@${esc(team.ownerName)})</div>
-    <div class="hist">${rows}</div>${moved}${keeper}`;
+  const render = (events, note) => {
+    $('pcBody').innerHTML = `
+      <h3>${esc(p.name)}</h3>
+      <div class="muted">${esc(p.position)} &middot; ${esc(team.teamName || team.ownerName)} (@${esc(team.ownerName)})</div>
+      <div class="hist">${histRows(pid, events)}</div>${note}${keeper}`;
+  };
+  render(null, '<div class="pc-note muted">Loading trades &amp; waiver moves…</div>');
   $('overlay').classList.add('open');
+  ensureTransactions().then(all => {
+    if (currentCardPid !== pid || !$('overlay').classList.contains('open')) return;
+    const evs = all[pid] ?? [];
+    let note = '';
+    if (!evs.length) {
+      let lastPick = null, lastYear = null;
+      for (const s of histCache.yearsDesc) {
+        const pk = s.picks.find(x => x.player_id === pid);
+        if (pk) { lastPick = pk; lastYear = s.year; break; }
+      }
+      if (lastPick && lastPick.roster_id !== team.rosterId) {
+        note = `<div class="pc-note muted">Changed teams since the ${lastYear} draft (no logged move in the last 3 seasons).</div>`;
+      }
+    }
+    render(evs, note);
+  }).catch(() => {
+    if (currentCardPid !== pid || !$('overlay').classList.contains('open')) return;
+    render(null, '<div class="pc-note muted">Movement history unavailable right now.</div>');
+  });
 }
 
 $('pcClose').addEventListener('click', () => $('overlay').classList.remove('open'));
