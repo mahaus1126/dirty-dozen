@@ -59,6 +59,18 @@
   .kbadge { display:inline-block; font-size:.72rem; padding:1px 6px; border-radius:8px;
             background:var(--pick); color:var(--accent); margin-left:6px; }
   .pc-note { margin-top:10px; font-size:.85rem; }
+  .note { background:var(--pick); border:1px solid var(--line); border-radius:10px;
+          padding:10px 14px; margin-bottom:12px; font-size:.88rem; }
+  #draftBoard table { border-collapse:collapse; width:auto; }
+  #draftBoard th, #draftBoard td { border:1px solid var(--line); padding:4px 6px;
+    font-size:.72rem; min-width:88px; max-width:112px; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; text-align:left; }
+  #draftBoard th { position:sticky; top:0; background:var(--card); z-index:2; }
+  #draftBoard .rnd { position:sticky; left:0; background:var(--card); z-index:1;
+    min-width:30px; max-width:34px; text-align:center; color:var(--muted); font-weight:600; }
+  #draftBoard td.k { background:var(--pick); }
+  #draftBoard .pos { color:var(--muted); margin-left:3px; }
+  #draftBoard .via { display:block; color:var(--accent); font-size:.65rem; }
   @media (max-width: 430px) {
     table { font-size:.78rem; }
     th, td { padding:3px 5px 3px 0; }
@@ -74,6 +86,7 @@
 <nav>
   <select id="seasonSel" aria-label="Season"></select>
   <button data-tab="keepers" class="active">Keepers</button>
+  <button data-tab="draft">Draft board</button>
   <button data-tab="weekly">Weekly $</button>
   <button data-tab="standings">Standings</button>
   <button data-tab="rules">Rules</button>
@@ -81,8 +94,13 @@
 <main>
   <div class="status" id="status">Fetching live data from Sleeper…</div>
   <section id="keepers" class="active">
+    <div class="note" id="seasonNote" hidden></div>
     <div class="grid" id="keeperGrid"></div>
     <div class="muted" id="pickHint" style="margin-top:8px">Tap a player for their recent draft history. Check up to 3 Keep boxes on a team to preview final keeper slots (collisions and traded picks resolved). Selections save on this device — the official call still happens in Sleeper.</div>
+  </section>
+  <section id="draft">
+    <div class="note" id="draftNote" hidden></div>
+    <div class="card" id="draftBoard"></div>
   </section>
   <section id="weekly"><div class="card" id="weeklyCard"></div></section>
   <section id="standings"><div class="card" id="standingsCard"></div></section>
@@ -169,6 +187,7 @@ async function load() {
     .map(y => `<option value="${y}">${y} season</option>`).join('');
   renderKeepers(board);
   restoreKeeps();
+  await renderDraftSection(viewSeason);
   await renderWeekly(current, users, rosters, config);
   renderStandings(users, rosters);
   $('rulesText').textContent = rulesText(config?.amounts);
@@ -189,6 +208,7 @@ let seasonsCache = null;          // raw [{year, picks}] for every prior season
 let currentView = null;           // stashed current-season board + caches
 let viewSeason = null;            // the season the page is currently showing
 const seasonViewCache = new Map();   // year -> built historical view
+const draftInfoCache = new Map();    // year -> Sleeper draft object (slot map)
 
 // Owner names are looked up through the CURRENT rosters — roster_id -> owner has
 // been stable in this league since 2021, so historical picks resolve correctly.
@@ -312,8 +332,10 @@ async function showSeason(y) {
     histCache = currentView.hist;
     $('subtitle').textContent = `${curYear} season — live from Sleeper`;
     $('pickHint').textContent = HINT_CURRENT;
+    $('seasonNote').hidden = true;
     renderKeepers(boardCache);
     restoreKeeps();
+    await renderDraftSection(y);
     renderStandings(currentView.users, currentView.rosters);
     await renderWeekly(currentView.league, currentView.users, currentView.rosters, configCache);
     return;
@@ -324,12 +346,81 @@ async function showSeason(y) {
   viewSeason = y;
   boardCache = v.board;
   histCache = v.hist;
-  $('subtitle').textContent = `${y} season — how the draft went`;
-  $('pickHint').textContent = `Viewing the ${y} draft — checked players are the keepers actually selected that year. Tap a player for history.`;
+  $('subtitle').textContent = `${y} season`;
+  $('pickHint').textContent = `Tap a player for history.`;
+  $('seasonNote').hidden = false;
+  $('seasonNote').innerHTML = `<b>Pre-draft view.</b> This is what teams looked like heading into the ${y} draft — checked players are the keepers they held (footer shows the slots they occupied). The Draft board tab shows how teams looked post-draft.`;
   renderKeepers(boardCache, { historical: true });
+  await renderDraftSection(y);
   renderStandings(v.users, v.rosters);
   await renderWeekly(v.league, v.users, v.rosters, configCache);
   $('status').style.display = 'none';
+}
+
+// --- Full draft board ------------------------------------------------------
+async function draftInfo(y) {
+  if (draftInfoCache.has(y)) return draftInfoCache.get(y);
+  const league = chainCache.find(lg => Number(lg.season) === y);
+  const drafts = league ? await j(`${API}/league/${league.league_id}/drafts`) : [];
+  draftInfoCache.set(y, drafts[0] ?? null);
+  return drafts[0] ?? null;
+}
+
+async function renderDraftSection(y) {
+  const curYear = Number(currentView.league.season);
+  if (y === curYear && preDraftCurrent) {
+    $('draftNote').hidden = false;
+    $('draftNote').innerHTML = `The ${y} draft hasn't happened yet — this board fills in after draft day. Meanwhile the Keepers tab is the pre-draft picture.`;
+    $('draftBoard').innerHTML = '<div class="muted">No draft to show yet.</div>';
+    return;
+  }
+  const picks = seasonsCache.find(s => s.year === y)?.picks ?? [];
+  if (!picks.length) {
+    $('draftNote').hidden = true;
+    $('draftBoard').innerHTML = '<div class="muted">No draft data for this season.</div>';
+    return;
+  }
+  const info = await draftInfo(y).catch(() => null);
+  const view = y === curYear ? currentView : await buildSeasonView(y);
+  const owner = (rid) => view.hist.ownerByRoster.get(rid) ?? `roster ${rid}`;
+  // Some drafts carry slot_to_roster_id directly; this league's only have
+  // draft_order (user -> slot), so derive slot -> roster via the rosters.
+  let slotOwner = info?.slot_to_roster_id ?? null;
+  if (!slotOwner && info?.draft_order) {
+    const rosterByOwner = new Map(view.rosters.map(r => [r.owner_id, r.roster_id]));
+    slotOwner = {};
+    for (const [uid, slot] of Object.entries(info.draft_order)) {
+      const rid = rosterByOwner.get(uid);
+      if (rid != null) slotOwner[slot] = rid;
+    }
+    if (!Object.keys(slotOwner).length) slotOwner = null;
+  }
+  const rounds = Math.max(...picks.map(p => p.round));
+  const slots = Math.max(...picks.map(p => p.draft_slot));
+  const bySlot = new Map(picks.map(p => [`${p.round}-${p.draft_slot}`, p]));
+  const head = Array.from({ length: slots }, (_, i) => {
+    const rid = slotOwner ? slotOwner[i + 1] : null;
+    return `<th>${i + 1}. ${rid != null ? esc(owner(rid)) : ''}</th>`;
+  }).join('');
+  const rows = Array.from({ length: rounds }, (_, r) => {
+    const cells = Array.from({ length: slots }, (_, s) => {
+      const p = bySlot.get(`${r + 1}-${s + 1}`);
+      if (!p) return '<td class="muted">—</td>';
+      const nm = `${(p.metadata?.first_name ?? '')[0] ?? ''}. ${p.metadata?.last_name ?? p.player_id}`;
+      const traded = slotOwner && p.roster_id !== slotOwner[s + 1];
+      const title = `${p.metadata?.first_name ?? ''} ${p.metadata?.last_name ?? ''}` +
+        (p.is_keeper ? ' — keeper slot' : '') +
+        (traded ? ` — pick traded to @${owner(p.roster_id)}` : '');
+      return `<td${p.is_keeper ? ' class="k"' : ''} title="${esc(title)}">` +
+        `${esc(nm)}<span class="pos">${esc(p.metadata?.position ?? '')}</span>` +
+        `${traded ? `<span class="via">→ @${esc(owner(p.roster_id))}</span>` : ''}</td>`;
+    }).join('');
+    return `<tr><td class="rnd">${r + 1}</td>${cells}</tr>`;
+  }).join('');
+  $('draftNote').hidden = false;
+  $('draftNote').innerHTML = `<b>Post-draft view.</b> The completed ${y} draft board — this is what teams looked like coming out of the draft. Shaded cells are keeper slots; an arrow marks a pick that was traded to another team.`;
+  $('draftBoard').innerHTML =
+    `<table><tr><th class="rnd">R</th>${head}</tr>${rows}</table>`;
 }
 
 // A historical view reconstructs each team's draft-day roster from its actual
