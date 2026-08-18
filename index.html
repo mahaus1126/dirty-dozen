@@ -20,6 +20,8 @@
   nav button { border:1px solid var(--line); background:var(--card); color:var(--ink);
                padding:8px 14px; border-radius:20px; cursor:pointer; font-size:.9rem; }
   nav button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  nav select { border:1px solid var(--line); background:var(--card); color:var(--ink);
+               padding:8px 10px; border-radius:20px; font-size:.9rem; cursor:pointer; }
   main { max-width:1080px; margin:0 auto; padding:8px 12px 48px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
@@ -65,6 +67,7 @@
   <div class="sub" id="subtitle">loading…</div>
 </header>
 <nav>
+  <select id="seasonSel" aria-label="Season"></select>
   <button data-tab="keepers" class="active">Keepers</button>
   <button data-tab="weekly">Weekly $</button>
   <button data-tab="standings">Standings</button>
@@ -74,7 +77,7 @@
   <div class="status" id="status">Fetching live data from Sleeper…</div>
   <section id="keepers" class="active">
     <div class="grid" id="keeperGrid"></div>
-    <div class="muted" style="margin-top:8px">Tap a player for their recent draft history. Check up to 3 Keep boxes on a team to preview final keeper slots (collisions and traded picks resolved). Selections save on this device — the official call still happens in Sleeper.</div>
+    <div class="muted" id="pickHint" style="margin-top:8px">Tap a player for their recent draft history. Check up to 3 Keep boxes on a team to preview final keeper slots (collisions and traded picks resolved). Selections save on this device — the official call still happens in Sleeper.</div>
   </section>
   <section id="weekly"><div class="card" id="weeklyCard"></div></section>
   <section id="standings"><div class="card" id="standingsCard"></div></section>
@@ -151,6 +154,14 @@ async function load() {
   histCache = buildHistCache(seasons, users, rosters);
   chainCache = chain;
   preDraftCurrent = current.status === 'pre_draft';
+  configCache = config;
+  seasonsCache = seasons;
+  viewSeason = Number(current.season);
+  currentView = { board, hist: histCache, league: current, users, rosters };
+  const yearsAvail = [viewSeason, 2025, 2024].filter((v, i, a) =>
+    a.indexOf(v) === i && (v === viewSeason || seasons.some(s => s.year === v)));
+  $('seasonSel').innerHTML = yearsAvail
+    .map(y => `<option value="${y}">${y} season</option>`).join('');
   renderKeepers(board);
   restoreKeeps();
   await renderWeekly(current, users, rosters, config);
@@ -168,6 +179,11 @@ let chainCache = null;
 let preDraftCurrent = false;
 let txnEventsPromise = null;
 let currentCardPid = null;
+let configCache = null;
+let seasonsCache = null;          // raw [{year, picks}] for every prior season
+let currentView = null;           // stashed current-season board + caches
+let viewSeason = null;            // the season the page is currently showing
+const seasonViewCache = new Map();   // year -> built historical view
 
 // Owner names are looked up through the CURRENT rosters — roster_id -> owner has
 // been stable in this league since 2021, so historical picks resolve correctly.
@@ -179,28 +195,43 @@ function buildHistCache(seasons, users, rosters) {
   return { yearsDesc, ownerByRoster };
 }
 
-function renderKeepers(board) {
+// Current season: interactive what-if picker. Historical: the board as it
+// looked heading into that draft, with the actual keepers pre-checked and
+// locked, and the footer showing the slots they really occupied.
+function renderKeepers(board, opts = {}) {
+  const hist = opts.historical === true;
   boardCache = board;
   picked.clear();
-  $('keeperGrid').innerHTML = board.teams.map((t, ti) => `
+  $('keeperGrid').innerHTML = board.teams.map((t, ti) => {
+    const kept = hist ? t.players.filter(p => p.actualKeeper) : [];
+    const slotsHtml = hist
+      ? (kept.length
+          ? `<div class="slots">Kept: ${kept.map(k =>
+              `<b>${esc(k.name)}</b> → R${k.actualRound}`).join('<br>')}</div>`
+          : '')
+      : `<div class="slots" id="slots-${ti}" hidden></div>`;
+    return `
     <div class="card">
       <h2>${esc(t.teamName || t.ownerName)}</h2>
       <div class="tn">@${esc(t.ownerName)}</div>
       <table>
         <tr><th>Player</th><th>Pos</th><th>Drafted</th><th>Keeper cost</th><th>Yrs kept</th><th>Keep</th></tr>
         ${t.players.map(p => `
-          <tr class="sel" data-team="${ti}" data-player="${esc(p.playerId)}">
+          <tr class="sel${hist && p.actualKeeper ? ' picked' : ''}" data-team="${ti}" data-player="${esc(p.playerId)}">
             <td>${esc(p.name)}</td><td class="muted">${esc(p.position)}</td>
             <td>${p.basisRound === 'FA' ? '<span class="muted">FA</span>' : `R${p.basisRound}`}</td>
             <td>${p.eligible ? `<span class="ok">R${p.costRound}</span>`
                              : `<span class="no" title="${esc(p.reason ?? '')}">N/A</span>`}</td>
             <td class="muted">${p.yearsKept || ''}</td>
-            <td>${p.eligible ? `<input type="checkbox" class="pick" data-team="${ti}"
-                  data-player="${esc(p.playerId)}" aria-label="Select ${esc(p.name)} as keeper">` : ''}</td>
+            <td>${hist
+                  ? (p.actualKeeper ? '<input type="checkbox" class="pick" checked disabled>' : '')
+                  : (p.eligible ? `<input type="checkbox" class="pick" data-team="${ti}"
+                        data-player="${esc(p.playerId)}" aria-label="Select ${esc(p.name)} as keeper">` : '')}</td>
           </tr>`).join('')}
       </table>
-      <div class="slots" id="slots-${ti}" hidden></div>
-    </div>`).join('');
+      ${slotsHtml}
+    </div>`;
+  }).join('');
 }
 
 // Checkbox = what-if keeper selection (delegated; survives re-renders).
@@ -254,6 +285,96 @@ function restoreKeeps() {
     }
     if (set.size) { picked.set(ti, set); renderSlots(ti); }
   });
+}
+
+// --- Season time-travel ----------------------------------------------------
+const HINT_CURRENT = 'Tap a player for their recent draft history. Check up to 3 Keep boxes on a team to preview final keeper slots (collisions and traded picks resolved). Selections save on this device — the official call still happens in Sleeper.';
+
+$('seasonSel').addEventListener('change', async (e) => {
+  const y = Number(e.target.value);
+  if (y === viewSeason) return;
+  await showSeason(y).catch(err => {
+    $('status').style.display = 'block';
+    $('status').textContent = `Failed to load ${y}: ${err.message}`;
+  });
+});
+
+async function showSeason(y) {
+  const curYear = Number(currentView.league.season);
+  if (y === curYear) {
+    viewSeason = y;
+    boardCache = currentView.board;
+    histCache = currentView.hist;
+    $('subtitle').textContent = `${curYear} season — live from Sleeper`;
+    $('pickHint').textContent = HINT_CURRENT;
+    renderKeepers(boardCache);
+    restoreKeeps();
+    renderStandings(currentView.users, currentView.rosters);
+    await renderWeekly(currentView.league, currentView.users, currentView.rosters, configCache);
+    return;
+  }
+  $('status').style.display = 'block';
+  $('status').textContent = `Loading the ${y} season…`;
+  const v = await buildSeasonView(y);
+  viewSeason = y;
+  boardCache = v.board;
+  histCache = v.hist;
+  $('subtitle').textContent = `${y} season — how the draft went`;
+  $('pickHint').textContent = `Viewing the ${y} draft — checked players are the keepers actually selected that year. Tap a player for history.`;
+  renderKeepers(boardCache, { historical: true });
+  renderStandings(v.users, v.rosters);
+  await renderWeekly(v.league, v.users, v.rosters, configCache);
+  $('status').style.display = 'none';
+}
+
+// A historical view reconstructs each team's draft-day roster from its actual
+// picks that year, evaluates keeper costs with only the data that existed
+// then, and marks the picks Sleeper recorded as keeper slots.
+async function buildSeasonView(y) {
+  if (seasonViewCache.has(y)) return seasonViewCache.get(y);
+  const league = chainCache.find(lg => Number(lg.season) === y);
+  if (!league) throw new Error(`no ${y} league in the chain`);
+  const [users, rosters, tradedPicks] = await Promise.all([
+    j(`${API}/league/${league.league_id}/users`),
+    j(`${API}/league/${league.league_id}/rosters`),
+    j(`${API}/league/${league.league_id}/traded_picks`),
+  ]);
+  const yPicks = seasonsCache.find(s => s.year === y)?.picks ?? [];
+  if (!yPicks.length) throw new Error(`no ${y} draft data`);
+  const byRoster = new Map();
+  for (const p of yPicks) {
+    if (!byRoster.has(p.roster_id)) byRoster.set(p.roster_id, []);
+    byRoster.get(p.roster_id).push(p);
+  }
+  const ownerIdByRoster = new Map(rosters.map(r => [r.roster_id, r.owner_id]));
+  const pseudoRosters = [...byRoster.entries()].map(([rid, picks]) => ({
+    roster_id: rid, owner_id: ownerIdByRoster.get(rid),
+    players: picks.map(p => p.player_id),
+  }));
+  const names = {};
+  for (const p of yPicks) {
+    names[p.player_id] = {
+      name: `${p.metadata?.first_name ?? ''} ${p.metadata?.last_name ?? ''}`.trim() || p.player_id,
+      position: p.metadata?.position ?? '',
+    };
+  }
+  const board = computeKeeperBoard({
+    seasons: seasonsCache.filter(s => s.year < y),
+    rosters: pseudoRosters, users, tradedPicks,
+    upcomingSeason: String(y), rounds: 15, playerNames: names,
+  });
+  const pickByPid = new Map(yPicks.map(p => [p.player_id, p]));
+  for (const t of board.teams) {
+    for (const p of t.players) {
+      const pk = pickByPid.get(p.playerId);
+      p.actualRound = pk ? pk.round : null;
+      p.actualKeeper = pk ? pk.is_keeper === true : false;
+    }
+  }
+  const hist = buildHistCache(seasonsCache.filter(s => s.year <= y), users, rosters);
+  const view = { board, hist, league, users, rosters };
+  seasonViewCache.set(y, view);
+  return view;
 }
 
 // Row tap = player history sub-card (the Keep column is reserved for the checkbox).
@@ -336,8 +457,9 @@ function histRows(pid, events) {
       ? `<div><span class="yr">${year} draft</span><span>R${pk.round} &middot; @${esc(owner(pk.roster_id))}${pk.is_keeper ? '<span class="kbadge">keeper slot</span>' : ''}</span></div>`
       : `<div><span class="yr">${year} draft</span><span class="muted">not drafted</span></div>` });
   }
-  for (const ev of events ?? []) {
-    const when = (preDraftCurrent && ev.y === Number(boardCache.upcomingSeason))
+  const viewedYear = Number(boardCache.upcomingSeason);
+  for (const ev of (events ?? []).filter(ev => ev.y <= viewedYear)) {
+    const when = (preDraftCurrent && ev.y === viewedYear && ev.y === Number(currentView.league.season))
       ? `${ev.y} offseason` : `${ev.y} wk ${ev.w}`;
     rows.push({ y: ev.y, w: ev.w + 0.5,
       html: `<div><span class="yr">${when}</span><span>${esc(moveLabel(ev, owner))}</span></div>` });
