@@ -36,9 +36,27 @@
   pre.rules { white-space:pre-wrap; font:inherit; }
   tr.sel { cursor:pointer; } tr.sel:hover td { background:var(--pick); }
   tr.picked td { background:var(--pick); }
+  input.pick { accent-color:var(--accent); width:15px; height:15px; cursor:pointer;
+               vertical-align:middle; }
   .slots { margin-top:8px; padding-top:6px; border-top:1px solid var(--line);
            font-size:.82rem; color:var(--muted); }
   .slots b { color:var(--ink); font-weight:600; }
+  #overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none;
+             align-items:center; justify-content:center; z-index:50; padding:16px; }
+  #overlay.open { display:flex; }
+  #playerCard { background:var(--card); border:1px solid var(--line); border-radius:12px;
+                max-width:380px; width:100%; padding:16px 18px; position:relative;
+                box-shadow:0 10px 40px rgba(0,0,0,.35); }
+  #playerCard h3 { margin:0 0 2px; font-size:1.1rem; padding-right:24px; }
+  #playerCard .close { position:absolute; top:8px; right:12px; border:0; background:none;
+                       color:var(--muted); font-size:1.4rem; cursor:pointer; line-height:1; }
+  .hist { margin-top:10px; border-top:1px solid var(--line); }
+  .hist > div { padding:6px 0; border-bottom:1px solid var(--line); font-size:.88rem;
+                display:flex; justify-content:space-between; gap:12px; }
+  .hist .yr { color:var(--muted); }
+  .kbadge { display:inline-block; font-size:.72rem; padding:1px 6px; border-radius:8px;
+            background:var(--pick); color:var(--accent); margin-left:6px; }
+  .pc-note { margin-top:10px; font-size:.85rem; }
 </style>
 </head>
 <body>
@@ -56,12 +74,18 @@
   <div class="status" id="status">Fetching live data from Sleeper…</div>
   <section id="keepers" class="active">
     <div class="grid" id="keeperGrid"></div>
-    <div class="muted" style="margin-top:8px">Tap up to 3 players on a team to preview their final draft slots (collisions and traded picks resolved).</div>
+    <div class="muted" style="margin-top:8px">Tap a player for their recent draft history. Check up to 3 Keep boxes on a team to preview final keeper slots (collisions and traded picks resolved).</div>
   </section>
   <section id="weekly"><div class="card" id="weeklyCard"></div></section>
   <section id="standings"><div class="card" id="standingsCard"></div></section>
   <section id="rules"><div class="card"><pre class="rules" id="rulesText"></pre></div></section>
 </main>
+<div id="overlay">
+  <div id="playerCard" role="dialog" aria-modal="true">
+    <button class="close" id="pcClose" aria-label="Close">&times;</button>
+    <div id="pcBody"></div>
+  </div>
+</div>
 <script type="module">
 import { computeKeeperBoard, resolveKeeperSlots } from './lib/keepers.js';
 import { weeklyWinner } from './lib/finances.js';
@@ -124,6 +148,7 @@ async function load() {
     upcomingSeason: current.season, rounds: 15, playerNames: names,
     overrides: config?.basisOverrides ?? {},
   });
+  histCache = buildHistCache(seasons, users, rosters);
   renderKeepers(board);
   await renderWeekly(current, users, rosters, config);
   renderStandings(users, rosters);
@@ -135,6 +160,17 @@ async function load() {
 const MAX_KEEPERS = 3;
 const picked = new Map();
 let boardCache = null;
+let histCache = null;
+
+// Owner names are looked up through the CURRENT rosters — roster_id -> owner has
+// been stable in this league since 2021, so historical picks resolve correctly.
+function buildHistCache(seasons, users, rosters) {
+  const userById = new Map(users.map(u => [u.user_id, u]));
+  const ownerByRoster = new Map(rosters.map(r =>
+    [r.roster_id, userById.get(r.owner_id)?.display_name ?? `roster ${r.roster_id}`]));
+  const yearsDesc = [...seasons].sort((a, b) => b.year - a.year).slice(0, 3);
+  return { yearsDesc, ownerByRoster };
+}
 
 function renderKeepers(board) {
   boardCache = board;
@@ -144,33 +180,81 @@ function renderKeepers(board) {
       <h2>${esc(t.teamName || t.ownerName)}</h2>
       <div class="tn">@${esc(t.ownerName)}</div>
       <table>
-        <tr><th>Player</th><th>Pos</th><th>Drafted</th><th>Keeper cost</th><th>Yrs kept</th></tr>
+        <tr><th>Player</th><th>Pos</th><th>Drafted</th><th>Keeper cost</th><th>Yrs kept</th><th>Keep</th></tr>
         ${t.players.map(p => `
-          <tr${p.eligible ? ` class="sel" data-team="${ti}" data-player="${esc(p.playerId)}"` : ''}>
+          <tr class="sel" data-team="${ti}" data-player="${esc(p.playerId)}">
             <td>${esc(p.name)}</td><td class="muted">${esc(p.position)}</td>
             <td>${p.basisRound === 'FA' ? '<span class="muted">FA</span>' : `R${p.basisRound}`}</td>
             <td>${p.eligible ? `<span class="ok">R${p.costRound}</span>`
                              : `<span class="no" title="${esc(p.reason ?? '')}">N/A</span>`}</td>
             <td class="muted">${p.yearsKept || ''}</td>
+            <td>${p.eligible ? `<input type="checkbox" class="pick" data-team="${ti}"
+                  data-player="${esc(p.playerId)}" aria-label="Select ${esc(p.name)} as keeper">` : ''}</td>
           </tr>`).join('')}
       </table>
       <div class="slots" id="slots-${ti}" hidden></div>
     </div>`).join('');
 }
 
-// Delegated: #keeperGrid is static markup, so this survives every re-render.
-$('keeperGrid').addEventListener('click', (e) => {
-  const tr = e.target.closest('tr.sel');
-  if (!tr) return;
-  const ti = Number(tr.dataset.team);
-  const pid = tr.dataset.player;
+// Checkbox = what-if keeper selection (delegated; survives re-renders).
+$('keeperGrid').addEventListener('change', (e) => {
+  const cb = e.target.closest('input.pick');
+  if (!cb) return;
+  const ti = Number(cb.dataset.team);
+  const pid = cb.dataset.player;
   const set = picked.get(ti) ?? new Set();
-  if (set.has(pid)) set.delete(pid);
-  else if (set.size < MAX_KEEPERS) set.add(pid);
-  else return;                       // at the cap — ignore the click
+  if (cb.checked) {
+    if (set.size >= MAX_KEEPERS) { cb.checked = false; return; }  // at the cap
+    set.add(pid);
+  } else {
+    set.delete(pid);
+  }
   picked.set(ti, set);
-  tr.classList.toggle('picked', set.has(pid));
+  cb.closest('tr').classList.toggle('picked', cb.checked);
   renderSlots(ti);
+});
+
+// Row tap = player history sub-card (the Keep column is reserved for the checkbox).
+$('keeperGrid').addEventListener('click', (e) => {
+  if (e.target.closest('td:last-child')) return;   // checkbox cell: never open the card
+  const tr = e.target.closest('tr[data-player]');
+  if (!tr) return;
+  openPlayerCard(Number(tr.dataset.team), tr.dataset.player);
+});
+
+function openPlayerCard(ti, pid) {
+  const team = boardCache?.teams[ti];
+  const p = team?.players.find(x => x.playerId === pid);
+  if (!p || !histCache) return;
+  let lastPick = null, lastYear = null;
+  const rows = histCache.yearsDesc.map(({ year, picks }) => {
+    const pk = picks.find(x => x.player_id === pid);
+    if (!pk) return `<div><span class="yr">${year}</span><span class="muted">not drafted</span></div>`;
+    if (!lastPick) { lastPick = pk; lastYear = year; }
+    const owner = histCache.ownerByRoster.get(pk.roster_id) ?? `roster ${pk.roster_id}`;
+    const badge = pk.is_keeper ? '<span class="kbadge">keeper slot</span>' : '';
+    return `<div><span class="yr">${year}</span><span>R${pk.round} &middot; @${esc(owner)}${badge}</span></div>`;
+  }).join('');
+  const moved = lastPick && lastPick.roster_id !== team.rosterId
+    ? `<div class="pc-note muted">On @${esc(team.ownerName)}'s roster now — changed teams since the ${lastYear} draft (trade or waivers).</div>`
+    : '';
+  const yrs = p.yearsKept ? ` &middot; kept ${p.yearsKept} straight season${p.yearsKept > 1 ? 's' : ''}` : '';
+  const keeper = p.eligible
+    ? `<div class="pc-note">${esc(boardCache.upcomingSeason)} keeper cost: <span class="ok">R${p.costRound}</span>${yrs}</div>`
+    : `<div class="pc-note"><span class="no">Not keeper-eligible</span> — ${esc(p.reason ?? '')}</div>`;
+  $('pcBody').innerHTML = `
+    <h3>${esc(p.name)}</h3>
+    <div class="muted">${esc(p.position)} &middot; ${esc(team.teamName || team.ownerName)} (@${esc(team.ownerName)})</div>
+    <div class="hist">${rows}</div>${moved}${keeper}`;
+  $('overlay').classList.add('open');
+}
+
+$('pcClose').addEventListener('click', () => $('overlay').classList.remove('open'));
+$('overlay').addEventListener('click', (e) => {
+  if (e.target === $('overlay')) $('overlay').classList.remove('open');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') $('overlay').classList.remove('open');
 });
 
 function renderSlots(ti) {
