@@ -23,7 +23,7 @@
   nav select { border:1px solid var(--line); background:var(--card); color:var(--ink);
                padding:8px 10px; border-radius:20px; font-size:.9rem; cursor:pointer; }
   main { max-width:1080px; margin:0 auto; padding:8px 12px 48px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr)); gap:12px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
           padding:12px 14px; overflow-x:auto; }
   .card h2 { margin:0 0 2px; font-size:1.05rem; }
@@ -59,6 +59,11 @@
   .kbadge { display:inline-block; font-size:.72rem; padding:1px 6px; border-radius:8px;
             background:var(--pick); color:var(--accent); margin-left:6px; }
   .pc-note { margin-top:10px; font-size:.85rem; }
+  @media (max-width: 430px) {
+    table { font-size:.78rem; }
+    th, td { padding:3px 5px 3px 0; }
+    .card { padding:10px 10px; }
+  }
 </style>
 </head>
 <body>
